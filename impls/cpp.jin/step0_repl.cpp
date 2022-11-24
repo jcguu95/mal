@@ -29,7 +29,8 @@ int main(int argc, char* argv[])
     std::string prompt = "user> ";
     for (;;) {
       std::cout << prompt;
-      std::getline(std::cin, input);
+      if (!std::getline(std::cin, input))
+        break;
       std::cout << rep(input) << std::endl;
     }
     return 0;
