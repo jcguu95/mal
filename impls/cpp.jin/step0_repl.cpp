@@ -35,3 +35,7 @@ int main(int argc, char* argv[])
     }
     return 0;
 }
+
+// An extra step is to support readline functionality. One
+// approach is to use linenoise.h. See details in the second half
+// of this tutorial https://www.youtube.com/watch?v=hCH5HhftB5Q
