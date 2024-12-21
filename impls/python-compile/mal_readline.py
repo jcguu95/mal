@@ -30,3 +30,10 @@ def readline(prompt="user> "):
     except EOFError:
         return None
     return line
+
+# from https://github.com/kanaka/mal/blob/master/impls/python3/mal_readline.py
+def input_(prompt: str) -> str:
+    line = input(prompt)
+    if line:
+        pyreadline.add_history(line)
+    return line

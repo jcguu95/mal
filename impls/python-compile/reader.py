@@ -1,110 +1,175 @@
 import re
-from mal_types import (_symbol, _keyword, _list, _vector, _hash_map, _s2u, _u)
+from collections.abc import Callable, Iterator, Mapping
+from re import Match
 
-class Blank(Exception): pass
+from mal_types import (Boolean, Error, Form, Keyword, List, Map, Nil,
+                       Number, String, Symbol, Vector)
 
-class Reader():
-    def __init__(self, tokens, position=0):
-        self.tokens = tokens
-        self.position = position
+# The `token` decorator adds regular expression groups all along this file.
+# The name of a group is the name of the decorated funtion, allowing
+# `read_form` to call it when it founds the token.
+# The global regular expression is compiled once when the module is loaded.
+token_groups: list[str] = []
 
-    def next(self):
-        self.position += 1
-        return self.tokens[self.position-1]
 
-    def peek(self):
-        if len(self.tokens) > self.position:
-            return self.tokens[self.position]
+class Lexer:
+    # Consume unnamed groups, but do not report them.
+    # Report None at the end of the input.
+
+    def __init__(self, source: str) -> None:
+        self._tokens = (t for t in pattern.finditer(source) if t.lastgroup)
+        self._peek: Match[str] | None = None
+        self.consume()
+
+    def consume(self) -> None:
+        try:
+            self._peek = next(self._tokens)
+        except StopIteration:
+            self._peek = None
+
+    def peek(self) -> re.Match[str] | None:
+        return self._peek
+
+
+def token(regex: str):
+    """Bind a regular expression to a function in this module. Form constuctor.
+
+    The lexer does not report tokens with None as constructor.
+    """
+
+    def decorator(fun: Callable[[Lexer, Match[str]], Form] | None):
+        if fun:
+            group = f'(?P<{fun.__name__}>{regex})'
         else:
-            return None
+            group = f'(?:{regex})'
+        token_groups.append(group)
+        return fun
 
-def tokenize(str):
-    tre = re.compile(r"""[\s,]*(~@|[\[\]{}()'`~^@]|"(?:[\\].|[^\\"])*"?|;.*|[^\s\[\]{}()'"`@,;]+)""");
-    return [t for t in re.findall(tre, str) if t[0] != ';']
+    return decorator
 
-def _unescape(s):
-    return s.replace('\\\\', _u('\u029e')).replace('\\"', '"').replace('\\n', '\n').replace(_u('\u029e'), '\\')
 
-def read_atom(reader):
-    int_re = re.compile(r"-?[0-9]+$")
-    float_re = re.compile(r"-?[0-9][0-9.]*$")
-    string_re = re.compile(r'"(?:[\\].|[^\\"])*"')
-    token = reader.next()
-    if re.match(int_re, token):     return int(token)
-    elif re.match(float_re, token): return int(token)
-    elif re.match(string_re, token):return _s2u(_unescape(token[1:-1]))
-    elif token[0] == '"':           raise Exception("expected '\"', got EOF")
-    elif token[0] == ':':           return _keyword(token[1:])
-    elif token == "nil":            return None
-    elif token == "true":           return True
-    elif token == "false":          return False
-    else:                           return _symbol(token)
+def context(match: Match[str]) -> str:
+    """Format some information for error reporting."""
+    start_idx = match.start() - 10
+    if 0 < start_idx:
+        start = '...' + match.string[start_idx:match.start()]
+    else:
+        start = match.string[:match.start()]
+    end_idx = match.end() + 20
+    if end_idx < len(match.string):
+        end = match.string[match.end():end_idx] + '...'
+    else:
+        end = match.string[match.end():]
+    return f': {start}<BETWEEN THIS>{match.group()}<AND THIS>{end}'
 
-def read_sequence(reader, typ=list, start='(', end=')'):
-    ast = typ()
-    token = reader.next()
-    if token != start: raise Exception("expected '" + start + "'")
 
-    token = reader.peek()
-    while token != end:
-        if not token: raise Exception("expected '" + end + "', got EOF")
-        ast.append(read_form(reader))
-        token = reader.peek()
-    reader.next()
-    return ast
+token(r'(?:[\s,]|;[^\n\r]*)+')(None)
 
-def read_hash_map(reader):
-    lst = read_sequence(reader, list, '{', '}')
-    return _hash_map(*lst)
 
-def read_list(reader):
-    return read_sequence(reader, _list, '(', ')')
+def unescape(match: Match[str]) -> str:
+    """Map a backslash sequence to a character for strings."""
+    char = match.string[match.end() - 1]
+    return '\n' if char == 'n' else char
 
-def read_vector(reader):
-    return read_sequence(reader, _vector, '[', ']')
 
-def read_form(reader):
-    token = reader.peek()
-    # reader macros/transforms
-    if token[0] == ';':
-        reader.next()
-        return None
-    elif token == '\'':
-        reader.next()
-        return _list(_symbol('quote'), read_form(reader))
-    elif token == '`':
-        reader.next()
-        return _list(_symbol('quasiquote'), read_form(reader))
-    elif token == '~':
-        reader.next()
-        return _list(_symbol('unquote'), read_form(reader))
-    elif token == '~@':
-        reader.next()
-        return _list(_symbol('splice-unquote'), read_form(reader))
-    elif token == '^':
-        reader.next()
-        meta = read_form(reader)
-        return _list(_symbol('with-meta'), read_form(reader), meta)
-    elif token == '@':
-        reader.next()
-        return _list(_symbol('deref'), read_form(reader))
+@token(r'"(?:(?:[^"\\]|\\.)*")?')
+def string(_: Lexer, tok: Match[str]) -> Form:
+    start, end = tok.span()
+    if end - start == 1:
+        raise Error('read: unbalanced string delimiter' + context(tok))
+    return String(re.sub(r'\\.', unescape, tok.string[start + 1:end - 1]))
 
-    # list
-    elif token == ')': raise Exception("unexpected ')'")
-    elif token == '(': return read_list(reader)
 
-    # vector
-    elif token == ']': raise Exception("unexpected ']'");
-    elif token == '[': return read_vector(reader);
+def read_list(lexer: Lexer, closing: str, pos: Match[str]) -> Iterator[Form]:
+    while not ((tok := lexer.peek()) and tok.group() == closing):
+        yield read_form(lexer, pos)
+    lexer.consume()
 
-    # hash-map
-    elif token == '}': raise Exception("unexpected '}'");
-    elif token == '{': return read_hash_map(reader);
 
-    # atom
-    else:              return read_atom(reader);
+@token(r'\(')
+def list_start(lexer: Lexer, tok: Match[str]) -> Form:
+    return List(read_list(lexer, ')', tok))
 
-def read_str(str):
-    tokens = tokenize(str)
-    if len(tokens) == 0: raise Blank("Blank Line")
-    return read_form(Reader(tokens))
+
+@token(r'\[')
+def vector_start(lexer: Lexer, tok: Match[str]) -> Form:
+    return Vector(read_list(lexer, ']', tok))
+
+
+@token(r'\{')
+def map_start(lexer: Lexer, tok: Match[str]) -> Form:
+    return Map(Map.cast_items(read_list(lexer, '}', tok)))
+
+
+single_macros = {
+    "'": 'quote',
+    '`': 'quasiquote',
+    '@': 'deref',
+    '~': 'unquote',
+    '~@': 'splice-unquote',
+}
+
+
+@token("['`@]|~@?")
+def macro(lexer: Lexer, tok: Match[str]) -> Form:
+    return List((Symbol(single_macros[tok.group()]), read_form(lexer, tok)))
+
+
+@token(r'\^')
+def with_meta(lexer: Lexer, tok: Match[str]) -> Form:
+    tmp = read_form(lexer, tok)
+    return List((Symbol('with-meta'), read_form(lexer, tok), tmp))
+
+
+@token('[])}]')
+def list_end(_: Lexer, tok: Match[str]) -> Form:
+    raise Error('read: unbalanced list/vector/map terminator' + context(tok))
+
+
+@token(r'-?\d+')
+def number(_: Lexer, tok: Match[str]) -> Form:
+    return Number(tok.group())
+
+
+almost_symbols: Mapping[str, Form] = {
+    'nil': Nil.NIL,
+    'false': Boolean.FALSE,
+    'true': Boolean.TRUE,
+}
+
+
+@token(r"""[^]\s"'(),;@[^`{}~]+""")
+def symbol(_: Lexer, tok: Match[str]) -> Form:
+    start, end = tok.span()
+    if tok.string[start] == ':':
+        return Keyword(tok.string[start + 1:end])
+    value = tok.group()
+    return almost_symbols.get(value) or Symbol(value)
+
+
+@token('.')
+def should_never_match(lexer: Lexer, tok: Match[str]) -> Form:
+    assert False, f'{lexer} {tok}'
+
+
+def read_form(lexer: Lexer, pos: Match[str] | None) -> Form:
+    """Parse a form from `lexer`, reporting errors as if started from `pos`."""
+    if (tok := lexer.peek()):
+        lexer.consume()
+        assert tok.lastgroup, f'{lexer} {tok}'
+        assert tok.lastgroup in globals(), f'{lexer} {tok}'
+        return globals()[tok.lastgroup](lexer, tok)
+    if pos:
+        raise Error('read: unbalanced form, started' + context(pos))
+    raise Error('read: the whole input was empty')
+
+
+def read(source: str) -> Form:
+    lexer = Lexer(source)
+    result = read_form(lexer, None)
+    if tok := lexer.peek():
+        raise Error('read: trailing items after the form' + context(tok))
+    return result
+
+
+pattern = re.compile('|'.join(token_groups))
