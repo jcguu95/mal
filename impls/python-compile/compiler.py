@@ -349,7 +349,7 @@ def COMPILE (ast, env, prefix="blk"):
     # env is for macroexpansion
     #logger.debug(f"Compiling AST:\n{ast}\n")
     ast = macroexpand(ast, env)
-    if types._symbol_Q(ast):
+    if types._symbol_Q(ast) or types._string_Q(ast): # FIXME _string_Q?
         compiled_strings = compile_symbol(ast, env, prefix)
     elif types._list_Q(ast):
         if len(ast) == 0:

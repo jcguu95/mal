@@ -8,6 +8,9 @@ import re
 import typing
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 
+# Jin
+import sys, copy, types as pytypes
+
 # The selected representations ensure that the Python == equality
 # matches the MAL = equality.
 
@@ -23,7 +26,6 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 #     implemented by form.__str__(readably=False)
 # repr(form)
 #     the python representation for debugging
-
 
 class Nil(enum.Enum):
     NIL = None
@@ -45,13 +47,28 @@ class Number(int):
     def __str__(self, readably: bool = True) -> str:
         return super().__str__()
 
+# Scalars
+def _nil_Q(exp):    return exp is None
+def _true_Q(exp):   return exp is True
+def _false_Q(exp):  return exp is False
+def _string_Q(exp):
+    if type(exp) in [String]:
+        return len(exp.val)
+    elif type(exp) in str_types:
+        return len(exp) == 0 or exp[0] != _u("\u029e")
+    else:
+        return False
+def _number_Q(exp): return type(exp) == int
+def _scalar_Q(exp): return _nil_Q(exp) or _true_Q(exp) or _false_Q(exp) or _string_Q(exp) or _number_Q(exp)
 
 class Symbol(str):
 
     def __str__(self, readably: bool = True) -> str:
         # pylint: disable=invalid-str-returned
         return self
-
+# Jin
+def _symbol_Q(exp):
+    return (type(exp) == Symbol) or _string_Q(exp)
 
 # The two other string types are wrapped in dataclasses in order to
 # avoid problems with == (symbols) and pattern matching (list and
@@ -77,6 +94,15 @@ class Keyword:
     def __str__(self, readably: bool = True) -> str:
         return ':' + self.val
 
+# Jin
+def _keyword_Q(exp):
+    if type(exp) in [String]:
+        len(exp.val)
+    elif type(exp) in str_types:
+        return len(exp) != 0 and exp[0] == _u("\u029e")
+    else:
+        return False
+
 
 class List(tuple['Form', ...]):
     # Avoid a name clash with typing.List. This improves mypy output.
@@ -88,6 +114,9 @@ class List(tuple['Form', ...]):
 
     def __str__(self, readably: bool = True) -> str:
         return '(' + pr_seq(self, readably) + ')'
+# Jin
+def _list_Q(exp):   return type(exp) == List
+def _sequential_Q(seq): return _list_Q(seq) or _vector_Q(seq)
 
 
 class Vector(tuple['Form', ...]):
@@ -99,7 +128,8 @@ class Vector(tuple['Form', ...]):
 
     def __str__(self, readably: bool = True) -> str:
         return '[' + pr_seq(self, readably) + ']'
-
+# Jin
+def _vector_Q(exp): return type(exp) == Vector
 
 class Map(dict[Keyword | String, 'Form']):
 
@@ -130,6 +160,13 @@ class Map(dict[Keyword | String, 'Form']):
         if key:
             raise Error(f'odd count in map binds, no value for {form}')
 
+# FIXME Hash_Map (from Jin) and Map (from new code) are conflicted.
+class Hash_Map(dict): pass
+def _hash_map(*key_vals):
+    hm = Hash_Map()
+    for i in range(0,len(key_vals),2): hm[key_vals[i]] = key_vals[i+1]
+    return hm
+def _hash_map_Q(exp): return type(exp) == Hash_Map
 
 Env = collections.ChainMap[str, 'Form']
 PythonCall = Callable[[Sequence['Form']], 'Form']
@@ -164,10 +201,11 @@ class Atom:
 
     def __str__(self, readably: bool = True) -> str:
         return f'(atom {self.val})'
-
+# Jin
+def _atom_Q(exp):   return type(exp) == Atom
 
 Form = (Atom | Boolean | Fn | Keyword | Macro | List
-        | Map | Nil | Number | String | Symbol | Vector)
+        | Map | Hash_Map | Nil | Number | String | Symbol | Vector)
 
 
 class Error(Exception):
@@ -183,3 +221,74 @@ def pr_seq(args: Iterable[Form], readably: bool = True, sep: str = ' ') -> str:
     # This would be OK if the signature was usual.
     # pylint: disable-next=unnecessary-dunder-call
     return sep.join(x.__str__(readably) for x in args)
+
+###
+
+def _equal_Q(a, b):
+    ota, otb = type(a), type(b)
+    if _string_Q(a) and _string_Q(b):
+        return a == b
+    if not (ota == otb or (_sequential_Q(a) and _sequential_Q(b))):
+        return False;
+    if _symbol_Q(a):
+        return a == b
+    elif _list_Q(a) or _vector_Q(a):
+        if len(a) != len(b): return False
+        for i in range(len(a)):
+            if not _equal_Q(a[i], b[i]): return False
+        return True
+    elif _hash_map_Q(a):
+        akeys = sorted(a.keys())
+        bkeys = sorted(b.keys())
+        if len(akeys) != len(bkeys): return False
+        for i in range(len(akeys)):
+            if akeys[i] != bkeys[i]: return False
+            if not _equal_Q(a[akeys[i]], b[bkeys[i]]): return False
+        return True
+    else:
+        return a == b
+
+def _clone(obj):
+    #if type(obj) == type(lambda x:x):
+    if type(obj) == pytypes.FunctionType:
+        if obj.__code__:
+            return pytypes.FunctionType(
+                    obj.__code__, obj.__globals__, name = obj.__name__,
+                    argdefs = obj.__defaults__, closure = obj.__closure__)
+        else:
+            return pytypes.FunctionType(
+                    obj.func_code, obj.func_globals, name = obj.func_name,
+                    argdefs = obj.func_defaults, closure = obj.func_closure)
+    else:
+        return copy.copy(obj)
+
+# Functions
+def _function(Eval, Env, ast, env, params):
+    def fn(*args):
+        return Eval(ast, Env(env, params, List(args))) #TODO Think - why compiling is better.
+    fn.__meta__ = None
+    fn.__ast__ = ast
+    fn.__gen_env__ = lambda args: Env(env, params, args)
+    return fn
+def _function_Q(f):
+    return callable(f)
+
+def py_to_mal(obj):
+        if type(obj) == list:   return List(obj)
+        if type(obj) == tuple:  return List(obj)
+        elif type(obj) == dict: return Hash_Map(obj)
+        else:                   return obj
+
+# python 3.0 differences
+if sys.hexversion > 0x3000000:
+    _u = lambda x: x
+    _s2u = lambda x: x
+else:
+    import codecs
+    _u = lambda x: codecs.unicode_escape_decode(x)[0]
+    _s2u = lambda x: unicode(x)
+
+if sys.version_info[0] >= 3:
+    str_types = [str, String]
+else:
+    str_types = [str, unicode, String]

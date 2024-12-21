@@ -1,208 +1,526 @@
-import copy, time
-from itertools import chain
+import collections.abc
+import dataclasses
+import itertools
+import time
+import operator
+import typing
+from collections.abc import Callable, Sequence
 
-import mal_types as types
-from mal_types import MalException, List, Vector
 import mal_readline
+
+from mal_types import (Atom, Boolean, Error, Fn, Form, Keyword, List,
+                       Macro, Map, Nil, Number, PythonCall, String,
+                       Symbol, ThrownException, Vector, pr_seq)
+
 import reader
-import printer
-
-# Errors/Exceptions
-def throw(obj): raise MalException(obj)
 
 
-# String functions
-def pr_str(*args):
-    return " ".join(map(lambda exp: printer._pr_str(exp, True), args))
-
-def do_str(*args):
-    return "".join(map(lambda exp: printer._pr_str(exp, False), args))
-
-def prn(*args):
-    print(" ".join(map(lambda exp: printer._pr_str(exp, True), args)))
-    return None
-
-def println(*args):
-    print(" ".join(map(lambda exp: printer._pr_str(exp, False), args)))
-    return None
+ns: dict[str, Form] = {}
 
 
-# Hash map functions
-def assoc(src_hm, *key_vals):
-    hm = copy.copy(src_hm)
-    for i in range(0,len(key_vals),2): hm[key_vals[i]] = key_vals[i+1]
-    return hm
+def built_in(name: str) -> Callable[[PythonCall], None]:
+    """Register in ns and add context to Errors."""
 
-def dissoc(src_hm, *keys):
-    hm = copy.copy(src_hm)
-    for key in keys:
-        hm.pop(key, None)
-    return hm
+    def decorate(old_f: PythonCall) -> None:
 
-def get(hm, key):
-    if hm is not None:
-        return hm.get(key)
-    else:
-        return None
+        def new_f(args: Sequence[Form]) -> Form:
+            try:
+                return old_f(args)
+            except Error as exc:
+                exc.add_note('The ' + name + ' core function received ['
+                             + pr_seq(args) + ' ] as arguments.')
+                raise
 
-def contains_Q(hm, key): return key in hm
+        ns[name] = Fn(new_f)
 
-def keys(hm): return types._list(*hm.keys())
-
-def vals(hm): return types._list(*hm.values())
+    return decorate
 
 
-# Sequence functions
-def coll_Q(coll): return sequential_Q(coll) or hash_map_Q(coll)
+def equality(value: Form) -> PythonCall:
 
-def cons(x, seq): return List([x]) + List(seq)
+    def new_f(args: Sequence[Form]) -> Form:
+        match args:
+            case [form]:
+                return Boolean(form == value)
+            case _:
+                raise Error('bad arguments')
 
-def concat(*lsts): return List(chain(*lsts))
-
-def nth(lst, idx):
-    if idx < len(lst): return lst[idx]
-    else: throw("nth: index out of range")
-
-def first(lst):
-    if types._nil_Q(lst): return None
-    else: return lst[0]
-
-def rest(lst):
-    if types._nil_Q(lst): return List([])
-    else: return List(lst[1:])
-
-def empty_Q(lst): return len(lst) == 0
-
-def count(lst):
-    if types._nil_Q(lst): return 0
-    else: return len(lst)
-
-def apply(f, *args): return f(*(list(args[0:-1])+args[-1]))
-
-def mapf(f, lst): return List(map(f, lst))
-
-# retains metadata
-def conj(lst, *args):
-    if types._list_Q(lst): 
-        new_lst = List(list(reversed(list(args))) + lst)
-    else:
-        new_lst = Vector(lst + list(args))
-    if hasattr(lst, "__meta__"):
-        new_lst.__meta__ = lst.__meta__
-    return new_lst
-
-def seq(obj):
-    if types._list_Q(obj):
-        return obj if len(obj) > 0 else None
-    elif types._vector_Q(obj):
-        return List(obj) if len(obj) > 0 else None
-    elif types._string_Q(obj):
-        return List([c for c in obj]) if len(obj) > 0 else None
-    elif obj == None:
-        return None
-    else: throw ("seq: called on non-sequence")
-
-# Metadata functions
-def with_meta(obj, meta):
-    new_obj = types._clone(obj)
-    new_obj.__meta__ = meta
-    return new_obj
-
-def meta(obj):
-    return getattr(obj, "__meta__", None)
+    return new_f
 
 
-# Atoms functions
-def deref(atm):    return atm.val
-def reset_BANG(atm,val):
-    atm.val = val
-    return atm.val
-def swap_BANG(atm,f,*args):
-    atm.val = f(atm.val,*args)
-    return atm.val
+built_in('nil?')(equality(Nil.NIL))
+built_in('false?')(equality(Boolean.FALSE))
+built_in('true?')(equality(Boolean.TRUE))
 
-# Arithmetics
-def subtract (args):
-    if len(args) == 0:
-        return 0
-    elif len(args) == 1:
-        return -args[0]
-    else:
-        return args[0] - sum(args[1:])
-def multiply (args):
-    if len(args) == 0:
-        return 1
-    elif len(args) == 1:
-        return args[0]
-    else:
-        return args[0] * multiply(args[1:])
 
-ns = { 
-        '=': types._equal_Q,
-        'throw': throw,
-        'nil?': types._nil_Q,
-        'true?': types._true_Q,
-        'false?': types._false_Q,
-        'number?': types._number_Q,
-        'string?': types._string_Q,
-        'symbol': types._symbol,
-        'symbol?': types._symbol_Q,
-        'keyword': types._keyword,
-        'keyword?': types._keyword_Q,
-        'fn?': lambda x: (types._function_Q(x) and not hasattr(x, '_ismacro_')),
-        'macro?': lambda x: (types._function_Q(x) and
-                             hasattr(x, '_ismacro_') and
-                             x._ismacro_),
+def membership(*classes: type) -> PythonCall:
 
-        'pr-str': pr_str,
-        'str': do_str,
-        'prn': prn,
-        'println': println,
-        'readline': lambda prompt: mal_readline.readline(prompt),
-        'read-string': reader.read_str,
-        'slurp': lambda file: open(file).read(),
-        '<':  lambda a,b: a<b,
-        '<=': lambda a,b: a<=b,
-        '>':  lambda a,b: a>b,
-        '>=': lambda a,b: a>=b,
-        '+': lambda *args: sum(args),
-        '-': lambda *args: subtract(args),
-        '*': lambda *args: multiply(args),
-        '/': lambda a,b: int(a/b),
-        'time-ms': lambda : int(time.time() * 1000),
-        'list': types._list,
-        'list?': types._list_Q,
-        'vector': types._vector,
-        'vector?': types._vector_Q,
-        'hash-map': types._hash_map,
-        'map?': types._hash_map_Q,
-        'assoc': assoc,
-        'dissoc': dissoc,
-        'get': get,
-        'contains?': contains_Q,
-        'keys': keys,
-        'vals': vals,
+    def new_f(args: Sequence[Form]) -> Form:
+        match args:
+            case [form]:
+                return Boolean(isinstance(form, classes))
+            case _:
+                raise Error('bad arguments')
 
-        'sequential?': types._sequential_Q,
-        'cons': cons,
-        'concat': concat,
-        'vec': Vector,
-        'nth': nth,
-        'first': first,
-        'rest': rest,
-        'empty?': empty_Q,
-        'count': count,
-        'apply': apply,
-        'map': mapf,
+    return new_f
 
-        'conj': conj,
-        'seq': seq,
 
-        'with-meta': with_meta,
-        'meta': meta,
-        'atom': types._atom,
-        'atom?': types._atom_Q,
-        'deref': deref,
-        'reset!': reset_BANG,
-        'swap!': swap_BANG}
+built_in('number?')(membership(Number))
+built_in('symbol?')(membership(Symbol))
+built_in('keyword?')(membership(Keyword))
+built_in('string?')(membership(String))
+built_in('list?')(membership(List))
+built_in('map?')(membership(Map))
+built_in('atom?')(membership(Atom))
+built_in('vector?')(membership(Vector))
+built_in('macro?')(membership(Macro))
+built_in('sequential?')(membership(List, Vector))
+built_in('fn?')(membership(Fn))
 
+
+def arithmetic(old_f: Callable[[int, int], int]) -> PythonCall:
+
+    def new_f(args: Sequence[Form]) -> Form:
+        match args:
+            case [Number() as left, Number() as right]:
+                return Number(old_f(left, right))
+            case _:
+                raise Error('bad arguments')
+
+    return new_f
+
+
+built_in('+')(arithmetic(operator.add))
+built_in('-')(arithmetic(operator.sub))
+built_in('*')(arithmetic(operator.mul))
+built_in('/')(arithmetic(operator.floordiv))
+
+
+def comparison(old_f: Callable[[int, int], bool]) -> PythonCall:
+
+    def new_f(args: Sequence[Form]) -> Form:
+        match args:
+            case [Number() as left, Number() as right]:
+                return Boolean(old_f(left, right))
+            case _:
+                raise Error('bad arguments')
+
+    return new_f
+
+
+built_in('<')(comparison(operator.lt))
+built_in('<=')(comparison(operator.le))
+built_in('>')(comparison(operator.gt))
+built_in('>=')(comparison(operator.ge))
+
+
+@built_in('=')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [left, right]:
+            return Boolean(left == right)
+        case _:
+            raise Error('bad arguments')
+
+
+built_in('list')(List)
+built_in('vector')(Vector)
+
+
+@built_in('prn')
+def _(args: Sequence[Form]) -> Form:
+    print(pr_seq(args))
+    return Nil.NIL
+
+
+@built_in('pr-str')
+def _(args: Sequence[Form]) -> Form:
+    return String(pr_seq(args))
+
+
+@built_in('println')
+def _(args: Sequence[Form]) -> Form:
+    print(pr_seq(args, readably=False))
+    return Nil.NIL
+
+
+@built_in('empty?')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [List() | Vector() as seq]:
+            return Boolean(not seq)
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('count')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [List() | Vector() as seq]:
+            return Number(len(seq))
+        case [Nil()]:
+            return Number(0)
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('read-string')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [String(line)]:
+            return reader.read(line)
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('slurp')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [String(file_name)]:
+            with open(file_name, 'r', encoding='utf-8') as the_file:
+                return String(the_file.read())
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('str')
+def _(args: Sequence[Form]) -> Form:
+    return String(pr_seq(args, readably=False, sep=''))
+
+
+@built_in('atom')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [form]:
+            return Atom(form)
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('deref')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [Atom(val)]:
+            return val
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('reset!')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [Atom() as atm, form]:
+            atm.val = form
+            return form
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('vec')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [List() as seq]:
+            return Vector(seq)
+        case [Vector() as seq]:
+            return seq
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('cons')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [head, List() | Vector() as tail]:
+            return List((head, *tail))
+        case _:
+            raise Error('bad arguments')
+
+
+def cast_sequence(arg: Form) -> List | Vector:
+    match arg:
+        case List() | Vector():
+            return arg
+        case _:
+            raise Error(f'{arg} is not a sequence')
+
+
+@built_in('concat')
+def _(args: Sequence[Form]) -> Form:
+    return List(itertools.chain.from_iterable(cast_sequence(x) for x in args))
+
+
+@built_in('nth')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [List() | Vector() as seq, Number() as idx]:
+            # Python would accept index = -1.
+            if 0 <= idx < len(seq):
+                return seq[idx]
+            raise Error(f'index {idx} not in range of {seq}')
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('apply')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [Fn(call) | Macro(call), *some,
+              List() | Vector() as more]:
+            return call((*some, *more))
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('map')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [Fn(call), List() | Vector() as seq]:
+            return List(call((x, )) for x in seq)
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('throw')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [form]:
+            raise ThrownException(form)
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('keyword')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [String(string)]:
+            return Keyword(string)
+        case [Keyword() as keyword]:
+            return keyword
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('symbol')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [String(string)]:
+            return Symbol(string)
+        case [Symbol() as symbol]:
+            return symbol
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('readline')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [String(prompt)]:
+            try:
+                return String(mal_readline.input_(prompt))
+            except EOFError:
+                return Nil.NIL
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('time-ms')
+def _(args: Sequence[Form]) -> Form:
+    if args:
+        raise Error('bad arguments')
+    return Number(time.time() * 1000.0)
+
+
+@built_in('meta')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [Fn() | List() | Vector() | Map() as form]:
+            return form.meta
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('with-meta')
+def _(args: Sequence[Form]) -> Form:
+    #  container = type(container)(container, meta=meta) confuses mypy.
+    match args:
+        case [List() as container, meta]:
+            return List(container, meta=meta)
+        case [Vector() as container, meta]:
+            return Vector(container, meta=meta)
+        case [Map() as container, meta]:
+            return Map(container, meta)
+        case [Fn() as container, meta]:
+            return dataclasses.replace(container, meta=meta)
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('seq')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [List() as seq]:
+            return seq if seq else Nil.NIL
+        case [Vector() as seq]:
+            return List(seq) if seq else Nil.NIL
+        case [String(string)]:
+            return List(String(c) for c in string) if string else Nil.NIL
+        case [Nil()]:
+            return Nil.NIL
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('conj')
+def conj(args: Sequence[Form]) -> Form:
+    match args:
+        case [Vector() as seq, *forms]:
+            return Vector((*seq, *forms))
+        case [List() as seq, *forms]:
+            return List((*reversed(forms), *seq))
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('get')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [Map() as mapping, Keyword() | String() as key]:
+            return mapping.get(key, Nil.NIL)
+        case [Nil(), Keyword() | String()]:
+            return Nil.NIL
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('first')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [List() | Vector() as seq]:
+            return seq[0] if seq else Nil.NIL
+        case [Nil()]:
+            return Nil.NIL
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('rest')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [List() | Vector() as seq]:
+            return List(seq[1:])
+        case [Nil()]:
+            return List()
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('hash-map')
+def _(args: Sequence[Form]) -> Form:
+    return Map(Map.cast_items(args))
+
+
+@built_in('assoc')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [Map() as mapping, *binds]:
+            return Map(itertools.chain(mapping.items(), Map.cast_items(binds)))
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('contains?')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [Map() as mapping, Keyword() | String() as key]:
+            return Boolean(key in mapping)
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('keys')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [Map() as mapping]:
+            return List(mapping.keys())
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('vals')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [Map() as mapping]:
+            return List(mapping.values())
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('dissoc')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [Map() as mapping, *keys]:
+            result = Map(mapping)
+            for key in keys:
+                if not isinstance(key, (Keyword, String)):
+                    raise Error(f'{key} is not a valid map key')
+                if key in result:
+                    del result[key]
+            return result
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('swap!')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [Atom(old) as atm, Fn(call), *more]:
+            new = call((old, *more))
+            atm.val = new
+            return new
+        case _:
+            raise Error('bad arguments')
+
+
+@built_in('py!*')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [String(python_statement)]:
+            # pylint: disable-next=exec-used
+            exec(compile(python_statement, '', 'single'), globals())
+            return Nil.NIL
+        case _:
+            raise Error('bad arguments')
+
+
+def py2mal(obj: typing.Any) -> Form:
+    match obj:
+        case None:
+            return Nil.NIL
+        case bool():
+            return Boolean(obj)
+        case int():
+            return Number(obj)
+        case str():
+            return String(obj)
+        case Sequence():
+            return List(py2mal(x) for x in obj)
+        case collections.abc.Mapping():
+            result = Map()
+            for py_key, py_val in obj.items():
+                key = py2mal(py_key)
+                if not isinstance(key, (Keyword, String)):
+                    raise Error(f'{key} is not a valid map key')
+                result[key] = py2mal(py_val)
+            return Map()
+        case _:
+            raise Error(f'failed to translate {obj}')
+
+
+@built_in('py*')
+def _(args: Sequence[Form]) -> Form:
+    match args:
+        case [String(python_expression)]:
+            # pylint: disable-next=eval-used
+            return py2mal(eval(python_expression))
+        case _:
+            raise Error('bad arguments')

@@ -12,7 +12,7 @@ _lisp_prompt = "user> "
 repl_env = Env()
 
 def READ(str):
-    return reader.read_str(str)
+    return reader.read(str)
 
 def EVAL(ast, env):
     logger.debug(f"EVAL AST: {ast}\n")
@@ -28,7 +28,7 @@ def REPL():
     logger.info(f"Hint: Use `{_wake_up_command}` to get into PYTHON.")
     while True:
         try:
-            line = mal_readline.readline(_lisp_prompt)
+            line = mal_readline.input_(_lisp_prompt)
             if line == None: break
             if line == "": continue
             if line == _wake_up_command:
@@ -36,10 +36,12 @@ def REPL():
                 break
             print(REP(line))
         except reader.Blank: continue
-        except types.MalException as e:
-            print("Error:", printer._pr_str(e.object))
+        # except types.MalException as e:
+        #     print("Error:", printer._pr_str(e.object))
+        except EOFError: break
         except Exception as e:
-            print("".join(traceback.format_exception(*sys.exc_info())))
+            # print("".join(traceback.format_exception(*sys.exc_info())))
+            traceback.print_exception(e, limit=10)
 
 LISP = REPL
 
@@ -87,17 +89,17 @@ def compile_file (source_path, target_dir="/tmp/pymal/"):
         file.write("print(_blk()(repl_env))")
     compileall.compile_dir(f"{target_dir}", force=True, legacy=True)
 
-for k, v in core.ns.items(): repl_env.set(types._symbol(k), v)
-repl_env.set(types._symbol('eval'), lambda ast: EVAL(ast, repl_env))
-repl_env.set(types._symbol('vector'), lambda *vector_elements: types.Vector(vector_elements))
-repl_env.set(types._symbol('hashmap'), lambda *dict_pairs: types.Hash_map()) # TODO FIXME
-repl_env.set(types._symbol('*ARGV*'), types._list(*sys.argv[2:]))
-repl_env.set(types._symbol('set-ismacro'), lambda fn: setattr(fn, '_ismacro_', True))
-repl_env.set(types._symbol('unset-ismacro'), lambda fn: setattr(fn, '_ismacro_', False))
-repl_env.set(types._symbol('ismacro'), lambda fn: getattr(fn, '_ismacro_', False))
-repl_env.set(types._symbol('clone'), types._clone)
-repl_env.set(types._symbol('debug'), DEBUG)
-repl_env.set(types._symbol('test'), TEST)
+for k, v in core.ns.items(): repl_env.set(types.Symbol(k), v)
+repl_env.set(types.Symbol('eval'), lambda ast: EVAL(ast, repl_env))
+repl_env.set(types.Symbol('vector'), lambda *vector_elements: types.Vector(vector_elements))
+repl_env.set(types.Symbol('hashmap'), lambda *dict_pairs: types.Hash_map()) # TODO FIXME
+repl_env.set(types.Symbol('*ARGV*'), types.List(*sys.argv[2:]))
+repl_env.set(types.Symbol('set-ismacro'), lambda fn: setattr(fn, '_ismacro_', True))
+repl_env.set(types.Symbol('unset-ismacro'), lambda fn: setattr(fn, '_ismacro_', False))
+repl_env.set(types.Symbol('ismacro'), lambda fn: getattr(fn, '_ismacro_', False))
+repl_env.set(types.Symbol('clone'), types._clone)
+repl_env.set(types.Symbol('debug'), DEBUG)
+repl_env.set(types.Symbol('test'), TEST)
 REP("(def! *host-language* \"python-compiled\")")
 REP("(def! not (fn* (a) (if a false true)))")
 REP("(def! read-file (fn* (f) (read-string (str \"(do \" (slurp f) \"\nnil)\"))))")

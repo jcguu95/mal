@@ -31,7 +31,10 @@ def readline(prompt="user> "):
         return None
     return line
 
-# from https://github.com/kanaka/mal/blob/master/impls/python3/mal_readline.py
+# The code of this function input_ was taken directly from
+# https://github.com/kanaka/mal/blob/master/impls/python3/mal_readline.py
+#
+# FIXME Need to integrate with readline (defined above).
 def input_(prompt: str) -> str:
     line = input(prompt)
     if line:
