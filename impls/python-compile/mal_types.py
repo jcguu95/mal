@@ -1,4 +1,5 @@
 import sys, copy, types as pytypes
+import enum
 
 # python 3.0 differences
 if sys.hexversion > 0x3000000:
@@ -76,6 +77,14 @@ def _string_Q(exp):
 def _number_Q(exp): return type(exp) == int
 def _scalar_Q(exp): return _nil_Q(exp) or _true_Q(exp) or _false_Q(exp) or _string_Q(exp) or _number_Q(exp)
 
+# Boolean
+class Boolean(enum.Enum):
+    FALSE = False
+    TRUE = True
+
+    def __str__(self, readably: bool = True) -> str:
+        return 'true' if self is self.TRUE else 'false'
+
 # Symbols
 class Symbol(str): pass
 def _symbol(str): return Symbol(str)
@@ -146,3 +155,8 @@ def py_to_mal(obj):
         if type(obj) == tuple:  return List(obj)
         elif type(obj) == dict: return Hash_Map(obj)
         else:                   return obj
+
+Form = (Atom | Boolean |
+        # Fn |
+        Keyword | Macro | List
+        | Map | Nil | Number | String | Symbol | Vector)
