@@ -36,8 +36,6 @@ user> (defmacro! unless (fn* (pred a b) `(if ~pred ~b ~a)))
 ; => nil
 user> (unless (= 0 1) 7 8)
 ; => 7
-user> (defmacro! awhen (fn* (form then) (let* (it ()))`(when ~form~b ~a)))
-; => nil
 ```
 
 ### Interopt with Underlying Python
