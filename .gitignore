@@ -16,7 +16,7 @@ package-lock.json
 */experiments
 node_modules
 */notes
-*/__pycache__
+**/__pycache__/
 GPATH
 GTAGS
 GRTAGS
