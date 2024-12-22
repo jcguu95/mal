@@ -29,9 +29,9 @@ user> fib
 ; => <function _blk_0.<locals>.blk_0.<locals>.blk_0_fn at 0x103cb5a80>
 user> (fib 10)
 ; => 89
-
 user> (let* (fib 8) (- 24 8))
 ; => 16
+
 user> (defmacro! unless (fn* (pred a b) `(if ~pred ~b ~a)))
 ; => nil
 user> (unless (= 0 1) 7 8)
