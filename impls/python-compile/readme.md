@@ -50,6 +50,47 @@ Running: env STEP=stepA_mal MAL_IMPL=js ../python-compile/run ../tests/perf3.mal
 iters over 10 seconds: 148519
 ```
 
+## Examples
+
+``` lisp
+$ ./impls/python-compile/run
+user> (+ 1 1)
+; => 2
+user> (= 0 0)
+; = > true
+user> (= 0 1)
+; => false
+
+user> (def! fib (fn* (N) (if (= N 0) 1 (if (= N 1) 1 (+ (fib (- N 1)) (fib (- N 2)))))))
+user> fib
+; => <function _blk_0.<locals>.blk_0.<locals>.blk_0_fn at 0x103cb5a80>
+user> (fib 10)
+; => 89
+
+user> (let* (fib 8) (- 24 8))
+; => 16
+user> (defmacro! unless (fn* (pred a b) `(if ~pred ~b ~a)))
+; => nil
+user> (unless (= 0 1) 7 8)
+; => 7
+user> (defmacro! awhen (fn* (form then) (let* (it ()))`(when ~form~b ~a)))
+; => nil
+```
+
+### Interopt with Underlying Python
+
+``` shell
+user> ;()
+Python 3.12.8 (main, Dec  8 2024, 03:59:45) [Clang 14.0.0 (clang-1400.0.29.202)] on darwin
+Type "help", "copyright", "credits" or "license" for more information.
+(InteractiveConsole)
+[PYTHON]> _lisp_prompt = 'lisp> '
+[PYTHON]> LISP()
+LISP()
+lisp> (+ 1 1)
+2
+```
+
 ## TODO
 
 + Wait for [mentioning decision](https://github.com/kanaka/mal/pull/653) and
