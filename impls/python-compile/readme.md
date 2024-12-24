@@ -10,8 +10,9 @@ interprets MAL code but does not include a compiler.
 This project is a fork of an earlier version of the official `python3`
 implementation, with additional enhancements to include a compiler. As a
 result, it achieves performance approximately **16** times faster than the
-original interpreter. The source code for this implementation is located in
-`./impls/python-compile/`.
+original interpreter. It has been officially recognized and included on the
+MAL project's README page. The source code for this implementation is located
+in `./impls/python-compile/`.
 
 ## Examples
 
@@ -88,10 +89,5 @@ for ((i=2; i<=10; i++)); do
     [ $? -ne 0 ] && { echo "Error occurred. Breaking loop."; break; }
 done
 ```
-
-## TODO
-
-+ Wait for [mentioning decision](https://github.com/kanaka/mal/pull/653) and
-  write a section about it.
 
 [^1]: Passed test suites: 2, 3, 4, 5, 6, 7, 8, 9, A.
